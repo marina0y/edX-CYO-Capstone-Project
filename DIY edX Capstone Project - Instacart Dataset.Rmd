@@ -1,0 +1,428 @@
+---
+title: "CYO edX Capstone Project -- Instacart/Market Basket Kaggle Data Set"
+author: "Marina Yamasaki"
+date: "1/8/2021"
+output: pdf_document
+---
+
+
+### 1. Intro/Overview/Exec Summary: (describes dataset, summarizes goals of project and key steps performed)
+Instacart/Market Basket 2017 Dataset: https://www.kaggle.com/c/instacart-market-basket-analysis
+Instacart is a service that enables consumers to purchase groceries without going to the grocery store. A consumer will use the instacart portal/app to purchase items and an instacart delivery employee will pick up and deliver those items to the consumer's home. In 2017, Instacart released a dataset on kaggle challenging the public to build models that could predict the products that an Instacart consumer might purchase in their next order. I have chosen to evaluate the Instacart data for my CYO Capstone project to continue to experiment with different machine learning techniques and further my overall data science understanding. 
+The data provided by Instacart consists of 6 files. The products, departments, and aisles files are reference tables, they provide names/descriptions for the product, department, and aisle IDs. The orders data file contains ~3.4M grocery orders and ~200K users. Each order is tied to a specific user. The order dataset also identifies how many orders have been made by each user and on what day of the week. The order_products_prior and order_products_train data tables breakout the products purchased in each order. The order_products_prior/train tables provide more insight into a users order history and product preferences. For instance the tables indicate if a product purchase is a reorder, what order the products were added to the cart, and how many days passed between a users orders. The order_product_train table only contains information about a user's most recent order.
+After downloading and cleaning the provided data tables, exploratory data analysis will be conducted to understand the data. Visualizations will be constructed to understand product popularity, user purchase behavior, and other notable trends. As the data is separated between various tables, work was done to parse out relevant data fields, aggregate information to build predictive variables, and breakout the data for variable construction, model development, and model testing. 
+
+##### Data Preparation:
+
+Install relevant packages and libraries:
+```{r message=FALSE}
+if(!require(dplyr)) 
+  install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) 
+  install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) 
+  install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) 
+  install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) 
+  install.packages('lubridate', repos = "http://cran.us.r-project.org")
+if(!require(recosystem)) 
+  install.packages('recosystem', repos = "http://cran.us.r-project.org")
+if(!require(rmarkdown)) 
+  install.packages('rmarkdown', repos = "http://cran.us.r-project.org")
+if(!require(rpart)) 
+  install.packages('rpart', repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) 
+  install.packages('randomForest', repos = "http://cran.us.r-project.org")
+if(!require(xgboost)) 
+  install.packages("xgboost", repos = "http://cran.us.r-project.org")
+if(!require(Ckmeans.1d.dp)) 
+  install.packages("xCkmeans.1d.dp", repos = "http://cran.us.r-project.org")
+if(!require(googledrive)) 
+  install.packages("googledrive", repos = "http://cran.us.r-project.org")
+if(!require(kableExtra)) 
+  install.packages('kableExtra', repos = "http://cran.us.r-project.org")
+library('dplyr')
+library('tidyverse')
+library('caret')
+library('data.table')
+library('stringr')
+library('lubridate')
+library('rmarkdown')
+library('recosystem')
+library('rmarkdown')
+library('rpart')
+library('randomForest')
+library('xgboost')
+library('Ckmeans.1d.dp')
+library('googledrive')
+library('kableExtra')
+```
+
+The instacart/market basket dataset is loaded into the following google drive folder: https://drive.google.com/drive/folders/1p-A5scQDoUHygHhpPBJvyZg03WnF1_6d?usp=sharing.
+The departments, aisles, products, and order_products__train data tables will be automatically downloaded from the google drive. The orders and order_products__prior will need to be manually downloaded (because of their file size, google drive requires user permission to download the data). The following code will unzip and read in the orders and order_products__prior data tables. 
+```{r}
+dep_id <- "1cutfNKqPkJ0bxRuCaIVZJ9G5Bi7h95l0"
+ais_id <- "1sW6yTGC_y71mrFmZqkLFO8LGC9pupHuw"
+prod_id <- "1nPpK8ICihE--rjQ0Yvr-_C2QVeaEeowT"
+opt_id <- "124_XGBr2qZ67Ef24DR7I_yFnohmR4emt"
+
+departments <- read.csv(sprintf("https://docs.google.com/uc?id=%s&export=download", dep_id))
+aisles <- read.csv(sprintf("https://docs.google.com/uc?id=%s&export=download", ais_id))
+products <- read.csv(sprintf("https://docs.google.com/uc?id=%s&export=download", prod_id))
+order_products_train <- read.csv(sprintf("https://docs.google.com/uc?id=%s&export=download", opt_id))
+
+getwd()
+# setwd("./Instacart Market Basket Data Set")
+orders <- read.csv(unzip("./orders.zip","orders.csv"))
+order_products_prior <- read.csv(unzip("./order_products__prior.zip","order_products__prior.csv"))
+```
+
+Set the categorical data as factors:
+```{r}
+aisles <- aisles %>% mutate(aisle = as.factor(aisle))
+departments <- departments %>% mutate(department = as.factor(department))
+products <- products %>% mutate(product_name = as.factor(product_name))
+orders <- orders %>% mutate(eval_set = as.factor(eval_set))
+```
+
+##### Data Overview:
+The data contains 49,688 products
+```{r}
+head(products) 
+```
+Products are organized within 134 aisles
+```{r}
+head(aisles)
+```
+Products are classified within 21 departments
+```{r}
+head(departments) 
+```
+
+There are 7 variables in the orders data set:
+order_id and user_id are table keys. Each order has a distinct order_id and each user has a distinct user_id.
+eval_set consists of 3 values - prior, train, and test. The latest order for any user is classified as either train or test. Any previous order for a user is classified as prior. As a result, the prior orders will be used to develop predictive variables to determine if a product will be reordered. The train orders will be partitioned. A large part of the train orders will be used to develop the models and a portion of the train orders will be used to validate the models. 
+order_dow - indicates on what day of the week the order was placed
+order_hour_of_day - indicates which hour of the day an order was placed
+days_since_prior - indicates the number of days between a user's consecutive orders, value is null for the user's first order
+```{r}
+glimpse(orders)
+```
+
+Examining the orders specific to user 1 illustrates the data structure. User 1's latest order is categorized as eval_set train. All prior orders are categorized as 'prior'. The data is partitioned so that the latest order for every user_id is categorized as either 'test' or 'train'. User 100's latest order has been categorized as test. In total 75K orders (~36% of latest orders) have been categorized as test. 131K orders are in the train set. 
+```{r}
+orders %>% filter(user_id == 1) # %>% kable %>% kable_styling(latex_options="scale_down")
+orders %>% filter(user_id == 100) # %>% kable %>% kable_styling(latex_options="scale_down")
+length(orders$eval_set[orders$eval_set == 'train'])
+length(orders$eval_set[orders$eval_set == 'test'])
+```
+
+The order_products_prior/train data tables contain 4 columns: order_id, product_id, add_to_cart_order, and reordered. These tables provide more detail to the orders table by breaking out the products purchased within each order. The add_to_cart_order variable indicates the order in which a product was added to the online cart. The reordered variable is a binary indicator, 1 means the order has been purchased by the user before, 0 means the product is being purchased for the first time by the user via Instacart. Reordered is our response variable for this analysis. Based on characteristics and variables of the user, products, user's past buying behavior... models will be built to predict if an item is reordered. The order_products_prior table contains 32.4M rows
+```{r}
+glimpse(order_products_prior)
+```
+
+The order_products_train contains 1.3M rows. 
+```{r}
+glimpse(order_products_train)
+```
+
+For the kaggle competition, an order_products data set was not provided for the test orders. As a result, the order_products_train table will be partitioned into train and test for model development and model evaluation, respectively. 
+
+### 2. Methods/Analysis: 
+##### Data Aggregation and Partitioning
+
+The aisles and departments tables are joined to the products data table so that all product information is in one table. 
+```{r message=FALSE, warning=FALSE}
+products <- products %>% left_join(aisles) %>% left_join(departments) 
+```
+
+A user_id column was added to the order_products_train. The user_ids were pulled from the orders table. Adding the user key to the table will be useful for model building as certain predictive variables related to user behavior can be created. 
+```{r }
+order_products_train$user_id <- orders$user_id[match(order_products_train$order_id,orders$order_id)]
+```
+
+The order_products_prior table was inner joined to the orders table. The resulting table contains all prior orders, details regarding when the orders were made, as well as, the items that were purchased. The products table was also joined to the resulting table to provide product name, department, and aisle information. 
+```{r message=FALSE, warning=FALSE}
+# Expand prior orders table in order to develop model variables
+prior_set_orders_full <- orders %>% inner_join(order_products_prior,by=c("order_id"))
+prior_set_orders_full <- prior_set_orders_full %>% 
+  left_join(select(products,product_id,product_name,aisle,department))
+glimpse(prior_set_orders_full)
+```
+
+Ideally, the full prior_set_orders_full table would be used for model development, however due to limited computing power and time constraints, only a small subset of the table will be utilized. 
+```{r message=FALSE, warning=FALSE}
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+subset <- createDataPartition(y = prior_set_orders_full$reordered, times = 1, p = 0.05, list = FALSE)
+prior_set_orders <- prior_set_orders_full[subset,]
+glimpse(prior_set_orders)
+```
+
+##### Visualizations - Examining Grocery Shopping Trends in the Data
+
+Users in the dataset have placed anywhere from 4 to 100 orders, with 4 being the most frequent. 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE}
+# Total Number of Orders by User
+orders %>% group_by(user_id) %>% summarize(total_orders = max(order_number)) %>% 
+  group_by(total_orders) %>% summarize(user_count = n()) %>% 
+  ggplot(aes(x=reorder(total_orders,-user_count),y=user_count)) +
+  geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90)) + 
+  scale_x_discrete(name="Total Orders",breaks=seq(0,100,5)) + ylab("User Frequency")
+```
+
+Bananas and organic bananas are the most purchased product, followed by strawberries, baby spinach, and avocado. 5 of the top 6 most purchased products are organic. 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE}
+# Most Purchased Products
+prior_set_orders %>% group_by(product_name) %>%
+  summarize(count=n()) %>% top_n(20,count) %>% arrange(desc(count)) %>% 
+  ggplot(aes(x=reorder(product_name,-count),y=count)) + geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle = 90)) + xlab("Product Name") + ylab("Product Order Count")
+```
+
+5,893 products in the data set have only been purchased once, ranging from juices, to mechanical pencils, and canola oil. Items like canola oil, mechanical pencils, and hydrocortisone cream likely take longer to finish and/or are used infrequently. 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE} 
+# Lease Purchased Products
+prior_set_orders %>% group_by(product_name) %>%
+  summarize(count=n()) %>% arrange(count) %>% filter(count==1) 
+```
+
+Produce, dairy eggs, and snacks are the departments from which the most products are ordered.
+
+```{r}
+# Most Purchased Departments                
+prior_set_orders %>% group_by(department) %>% summarize(count=n()) %>% 
+  top_n(20,count) %>% arrange(desc(count)) %>% ggplot(aes(x=reorder(department,-count),y=count)) +
+  geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90)) + 
+  xlab("Department") + ylab("Department Order Count")
+```
+
+The top departments from which users buy may be skewed by the number of products within each department. For instance, 6,264 products are considered snacks, ~13% of the total products. 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE}
+# Number of products within each department               
+products %>% group_by(department) %>% summarize(count=n()) %>% 
+  top_n(20,count) %>% arrange(desc(count)) %>% ggplot(aes(x=reorder(department,-count),y=count)) +
+  geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90)) + 
+  xlab("Department") + ylab("Number of Products")
+```
+
+Fresh fruits, fresh vegetables are the aisles most purchased from. The top 2 aisles are nearly double the #3 aisle (packaged vegetables/fruits). 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE}
+# Most Purchased Aisles
+prior_set_orders %>% group_by(aisle) %>% summarize(count=n()) %>% 
+  top_n(20,count) %>% arrange(desc(count)) %>% ggplot(aes(x=reorder(aisle,-count),y=count)) +
+  geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90)) + 
+  xlab("Aisle") + ylab("Aisle Order Count")
+
+```
+
+Users have purchased between 1 and 145 products per order. It is more common for users to place smaller orders, the average order includes ~9 products. 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE}
+# Items per order
+temp <- prior_set_orders %>% group_by(order_id) %>% summarize(product_num=max(add_to_cart_order)) %>% 
+  select(order_id,product_num)
+temp %>% group_by(product_num) %>% summarize(count=n()) %>% filter(product_num <= 50) %>% 
+  ggplot(aes(x=product_num,y=count)) + geom_bar(stat="identity") +
+  scale_x_continuous(name="Products Per Order", breaks=seq(0,50,2))
+```
+
+Users have made between 1 and 99 grocery orders. The median number of orders is 9. 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE}
+temp <- prior_set_orders %>% group_by(user_id) %>% 
+  summarize(order_ct = max(order_number)) %>% select(user_id, order_ct)
+temp %>% group_by(order_ct) %>% dplyr::summarize(count=n()) %>% 
+  ggplot(aes(x=order_ct,y=count)) + geom_bar(stat="identity") +
+  xlab("Number of Orders") + ylab("Frequency")
+```
+
+On average users place an order every 11 days. The frequency of the 30 day bar raises some questions, for instance, if there is incentives or penalties for placing orders more or less frequently. The 30 day bar could also be a catch bucket and represent orders placed every 30 or more days. The NAs in the days_since_prior_order column would represent first time orders. There are ~208K first time orders in this data set. 
+
+```{r echo=FALSE, fig.height=3, fig.width=6,warning=FALSE,message=FALSE}
+# Order Frequency
+prior_set_orders %>% ggplot(aes(x=days_since_prior_order)) + geom_histogram(binwidth=1) +
+  xlab("# Days between Orders") + ylab("Frequency")
+summary(prior_set_orders$days_since_prior_order)
+```
+
+59% of products ordered are reorders. From a preliminary examination, the percent of products that are reorders increases as the order number increases. ~27% on order 2 grows to ~51% on order 5. 
+
+```{r warning=FALSE,message=FALSE}
+# Reorder Frequency
+sum(prior_set_orders$reordered)/length(prior_set_orders$reordered)
+# Number of reorders for order 2
+sum(prior_set_orders$reordered[prior_set_orders$order_number == 2])/
+  length(prior_set_orders$reordered[prior_set_orders$order_number == 2])
+# Number of reorders for order 3
+sum(prior_set_orders$reordered[prior_set_orders$order_number == 3])/
+  length(prior_set_orders$reordered[prior_set_orders$order_number == 3])
+# Number of reorders for order 4
+sum(prior_set_orders$reordered[prior_set_orders$order_number == 4])/
+  length(prior_set_orders$reordered[prior_set_orders$order_number == 4])
+# Number of reorders for order 5
+sum(prior_set_orders$reordered[prior_set_orders$order_number == 5])/
+  length(prior_set_orders$reordered[prior_set_orders$order_number == 5])
+
+```
+
+##### Building Predictor Variables
+Predictor variables are necessary for the construction of the model. The original data fields are too granular so summary statistics will be calculated at the product, user and product x user levels. The summary statistics will encompass historical grocery ordering behavior which will enable us to predict future purchasing, specifically reordering probability. 
+
+Calculating Product Purchase Predictors -- The variables being created are: 
+prod_totalorders <- the total number of times a product has been purchased
+prod_totalreorders <- the total number of times a product has been reordered
+prod_totalfirstorders <- the total number of times a product has been in a user's first instacart order
+prod_reorderratio <- the ratio of times a product has been reordered over times a product has been purchased
+```{r message=FALSE, warning=FALSE}
+# Product Predictors -- popularity of products
+# Introducing variables specific to each product
+# How often is a product purchased, reordered, ordered for the first time, reorder ratio
+prod <- prior_set_orders %>% group_by(product_id) %>% 
+  summarize(prod_totalorders = n(),
+            prod_totalreorders = sum(reordered),
+            prod_totalfirstorders = sum(is.na(days_since_prior_order))) %>%
+  arrange(desc(prod_totalorders))
+prod <- prod %>% mutate(prod_reorderratio = prod_totalreorders/prod_totalorders)
+glimpse(prod) 
+```
+
+Calculating User Purchase Predictors -- The variables being created are:  
+user_ordertotal <- the total orders a user has placed
+user_avgprodsperorder <- the average number of products a user has purchased per order
+user_distinctprodsordered <- the number of distinct products a user has purchased
+user_reordertotal <- the number of reorders a user has placed
+user_reorderprob <- the ratio of reordered items over total products purchased
+user_avgdaysbtworder <- the average number of days between a users orders 
+```{r message=FALSE, warning=FALSE}
+# User Predictors -- user order behavior
+user <- prior_set_orders %>% 
+  group_by(user_id) %>% 
+  summarize(user_ordertotal = max(order_number),user_productordertotal = n(),
+            user_avgprodsperorder = n()/max(order_number),
+            user_distinctprodsordered = n_distinct(product_id),
+            user_reordertotal = sum(reordered),
+            user_reorderprob = sum(reordered==1)/sum(order_number>1),
+            user_avgdaysbtworder = sum(days_since_prior_order,na.rm=T)/(max(order_number)-1))
+glimpse(user)
+```
+
+Calculating User x Product Predictors -- The variables being created are:
+userxprod_ordertotal <- the number of times a user has purchased a specific product
+userxprod_reordertotal <- the number of times a user has reordered a specific product
+userxprod_avg_addtocartorder <- the average order in which a user adds a product to their order
+```{r message=FALSE, warning=FALSE}
+# User x Product Predictors -- user behavior for specific products
+userxprod <- prior_set_orders %>% 
+  group_by(user_id,product_id) %>% 
+  summarize(userxprod_ordertotal = n(),
+            userxprod_reordertotal = sum(reordered),
+            userxprod_avg_addtocartorder = mean(add_to_cart_order))
+glimpse(userxprod)
+```
+
+The product predictors, user predictors, and product x user predictors were aggregated into a single table. The predictors are joined to the order_products_train set to create the order_pred table. The order_pred table contains the user_id and product_id for a subset of the latest instacart orders. The order_pred table will be used to develop models predicting if a user will reorder specific grocery items. 
+```{r message=FALSE, warning=FALSE}
+vars <- userxprod %>% inner_join(prod) %>% inner_join(user)
+order_pred_set <- vars %>% left_join(select(order_products_train,user_id,
+                                             product_id,reordered))
+order_pred_set$reordered[is.na(order_pred_set$reordered)] <- 0
+```
+
+The order_pred table must be partitioned into train, test, and validation datasets. The models will be developed using train. Model parameters and preliminary model evaluation will be done against the test set. Validation will be used to evaluate the final model. Partitioning the data ensures that created models are not overfit to the training dataset. The full data set was subset to 200K to account for available computing power. 
+```{r message=FALSE, warning=FALSE}
+set.seed(1, sample.kind="Rounding") 
+order_pred <- order_pred_set[1:200000,]
+
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y=order_pred$reordered,times=2,p=0.2,list = FALSE)
+train <- order_pred[-test_index[,1],]
+test <- order_pred[test_index[,1],]
+validate <- order_pred[test_index[,2],]
+```
+
+### 3. Results: (presents modeling results and discusses model performance)
+
+##### Using XGBoost to select most predictive variables. 
+The XGBoost package will be utilized to determine what variables are most important for variable prediction. In prior steps, a number of predictors were constructed but all variables may not be predictive and there may be correlations between variables.
+For the purposes of this analysis, the XGBoost will run to on a logistic regression model and evaluated using the logloss metric. Accuracy would not be appropriate for the instacart data due to the nature of the reordered variable. In the train set, ~10% of product orders are reordered products. Therefore a prediction of 100% reorders would result in 100% accuracy. Logloss is best used to measure the probability of a binary response variable. Logloss is a more appropriate performance metric because there is a penalty for incorrect classification. 
+```{r}
+params <- list("objective"= "reg:logistic","eval_metric"="logloss")
+X <- xgb.DMatrix(as.matrix(train %>% select(-reordered)), label = train$reordered)
+set.seed(1, sample.kind="Rounding")
+logmodel_vartest <- xgboost(data = X, params = params, nrounds = 80)
+```
+
+XGBoost logistic regression ran 80 model iterations, testing different predictor variable combinations to optimize logloss. As the models are iterated through, variables are evaluated on 4 metrics: gain, cover, frequency, and importance.  
+```{r}
+# We estimate the importance of the predictors
+var_importance <- xgb.importance(colnames(X), model = logmodel_vartest)
+var_importance
+```
+
+The ensembling results indicate that the number of times a user reorders a specific product, is the most predictive variable. The number of times a product is reordered is the second most important feature. To start modeling, the top 7 features will be included (greater than 0.05 importance).
+```{r}
+# Plot importance by predictor
+xgb.ggplot.importance(var_importance)
+```
+
+Model 1: Logistic Regression using selected variables 
+With the selected variables, the first model built is a logistic regression model. Using the predict function, the logistic regression model will produce a probability of reorder. The predictions are converted to a binary result using a 0.5 cutoff. Any probability less than or equal to 0.5 is set as not reordered, any probability greater than 0.5 is set as reordered. 
+```{r}
+# Build the logistic regression model using the train data set
+log_fit <- lm(reordered ~ userxprod_reordertotal + 
+                prod_reorderratio + user_ordertotal +
+                user_id + user_avgdaysbtworder + user_reorderprob + 
+                user_avgprodsperorder, data=train)
+log_fit
+# p_hat probability of reorder
+p_hat <- predict(log_fit,test)
+summary(p_hat)
+y_hat <- factor(ifelse(p_hat > 0.5,1,0))
+length(y_hat[y_hat==1])/length(y_hat)
+# 0.94
+F_meas(y_hat,factor(test$reordered))
+# Confusion Matrix 
+confusionMatrix(y_hat,factor(test$reordered))
+```
+The resulting F1 score for the logistic regression is 0.94. The F1 score indicates a well performing model, however the confusion matrix illustrates that the model predicts a reorder rate of 0.03% when the actual reorder rate is 11.6%. The balanced accuracy is 0.50. The model is conservative and is skewed to predicting not reordered. 
+
+
+Model 2: Random Forest 
+The second model used to fit the data is a random forest model. The random forest model averages multiple decision trees using bootstrapping. The random forest model is an improvement to the logistic regression model. The F1 score is less than the logistic regression 0.94 to 0.92, however the specificity -- correctly predicting not reordered was greatly improved. Specificity went from 0.001 to 0.13.
+```{r}
+train$reordered <- as.factor(train$reordered)
+rf <- randomForest(reordered ~ userxprod_reordertotal + 
+                     prod_reorderratio + user_ordertotal +
+                     user_id + user_avgdaysbtworder + user_reorderprob + 
+                     user_avgprodsperorder, method='rpart',
+                   data = train, ntree = 5, na.action = na.exclude)
+y_hat_rf <- predict(rf,test)
+# 0.93
+F_meas(y_hat_rf,factor(test$reordered))
+confusionMatrix(y_hat_rf,factor(test$reordered))
+```
+I ran a random forest, increasing the number of trees averaged from 5 to 50 to compare the results. There was some improvement as the positive predictive value went from 0.88 to 0.89. 
+```{r}
+train$reordered <- as.factor(train$reordered)
+rf <- randomForest(reordered ~ userxprod_reordertotal + 
+                     prod_reorderratio + user_ordertotal +
+                     user_id + user_avgdaysbtworder + user_reorderprob + 
+                     user_avgprodsperorder, method='rpart',
+                   data = train, ntree = 50, na.action = na.exclude)
+y_hat_rf <- predict(rf,test)
+# 0.93
+F_meas(y_hat_rf,factor(test$reordered))
+confusionMatrix(y_hat_rf,factor(test$reordered))
+```
+
+### 4. Conclusion: (brief summary of report, limitations, future work)
+In modeling both the logistic regression and the random forest models, the random forest approach was better able to predict reorders. The random forest produced a more balanced model. The logistic regression had a high sensitivity but a very low specificity. The data set is particularly difficult because the response variable is heavily skewed, only ~11% of the orders are reorders. Although the kaggle data set contains a lot of data (~32M rows), the report is limited in its ability to evaluate the full data set do to the computing constraints. To continue this analysis, there are additional variables that would be investigated. For instance, the increase in reorder rate as the order number increases. Additionally, department and aisle were not included as predictive variables but could provide additional insight. In evaluating others' approaches to the instacart data there are a lot of different models and packages that would be useful to enhance the machine learning. The edX course provided a great foundational knowledge of data science. I hope to continue to expand my exposure and understanding of the different modeling capabilities and continue to enhance my data science knowledge. 
+
+
